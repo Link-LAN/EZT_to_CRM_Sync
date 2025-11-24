@@ -4,6 +4,7 @@ using System.Data;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Mail;
+using System.Runtime.Serialization.Formatters;
 using System.Text;
 using System.Xml.Linq;
 
@@ -19,10 +20,14 @@ namespace EZ_Get_ProjectProgress
      * 
      * 排程位置：192.168.100.212 的 C:\Scheduling\EZTeamwork\
      * 排程時間：每天00:00、12:00各執行一次
+     * 
+     * 若有錯誤問題，可以遠端連線到ezAP，查看LOG，C:\ezteamwork\cygwin64\home\Administrator\logs\tm.log
+     * 
      */
     class Program
     {
-
+        //測試
+        private readonly static bool blnTEST = false;
         private static readonly HttpClientHandler handler = new HttpClientHandler
         {
             ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true // 忽略 SSL 驗證
@@ -44,11 +49,17 @@ namespace EZ_Get_ProjectProgress
                 dtNewProject.Columns.Add("Performance");
                 dtNewProject.Columns.Add("CRMNo");
 
-                string baseUrl = "https://ezteamwork.jmg.com.tw:18443/services/";
-                //本機
-                //string token = "6FD46F2011A65D81C7CA062D02DFF16467FB5C637A935FC8BCBE8B4A69FBA204930829F4929EDD5332A064FF8164468134101177FF44605F046999D9CDA458FDAE88EA99E93AB1DB1A250116DC5BB58A173D08C26BB7D7AA";
-                //正式環境.212
-                string token = "817E88150EA4CE8CB8ED924084676687BB3F1360572516FD8FC76DAB8A9BA2062582CFA368650EEFCEFBB8945C39180B4BBDC0B8EF62265FE3DE5B9C0233B7032BDA7D9F0CDF56C11EC72024BF60C972EADC8AE4F28E88CD";
+                string baseUrl = "https://ezteamwork.jmg.com.tw:18443/services/", token;
+                if (blnTEST)
+                {
+                    //本機
+                    token = "6FD46F2011A65D81C7CA062D02DFF16467FB5C637A935FC8BCBE8B4A69FBA204930829F4929EDD5332A064FF8164468134101177FF44605F046999D9CDA458FDAE88EA99E93AB1DB1A250116DC5BB58A173D08C26BB7D7AA";
+                }
+                else
+                {
+                    //正式環境.212
+                    token = "817E88150EA4CE8CB8ED924084676687BB3F1360572516FD8FC76DAB8A9BA2062582CFA368650EEFCEFBB8945C39180B4BBDC0B8EF62265FE3DE5B9C0233B7032BDA7D9F0CDF56C11EC72024BF60C972EADC8AE4F28E88CD";
+                }
 
                 // Step 1: 查詢專案清單   (排除CRM交易編號是空的專案 AND convert(nvarchar(max),sda0) != '')
                 string projectSoap = $@"<?xml version=""1.0"" encoding=""utf-8""?>
@@ -86,7 +97,16 @@ namespace EZ_Get_ProjectProgress
                                       ProjObjKey = p.Elements().FirstOrDefault(x => x.Name.LocalName == "projObjKey")?.Value ?? "",
                                       CRMNo = p.Elements().FirstOrDefault(x => x.Name.LocalName == "sda0")?.Value ?? ""
                                   })
+                                  .Where(x => !string.IsNullOrWhiteSpace(x.ProjID)   // ProjID 不可空
+                                           && !string.IsNullOrWhiteSpace(x.ProjObjKey)) // ProjObjKey 不可空
                                   .ToList();
+                //專案總數
+                int countProj = projects.Count;
+                if (blnTEST)
+                {
+                    string htmlBody = RetHtml(projects);
+                    ErrSendEmail("EZT_排程成功", htmlBody);
+                }
 
                 // Step 3: 對每個專案查詢任務清單
                 foreach (var project in projects)
@@ -310,12 +330,58 @@ namespace EZ_Get_ProjectProgress
                 From = new MailAddress("jiinming@mail.jmg.com.tw"), // 發件人地址
                 Subject = subject, // 郵件標題
                 Body = body, // 郵件內容
-                IsBodyHtml = false // 設置郵件內容是否為 HTML 格式
+                IsBodyHtml = true // 設置郵件內容是否為 HTML 格式
             };
             // 添加收件人
-            mailMessage.To.Add("J1@jmg.com.tw"); // 分割並加入每個收件人
+            if (blnTEST)
+            {
+                mailMessage.To.Add("link.lan@jmg.com.tw"); // 分割並加入每個收件人
+            }
+            else
+            {
+                mailMessage.To.Add("J1@jmg.com.tw"); // 分割並加入每個收件人
+            }
             // 發送郵件
             smtpClient.Send(mailMessage);
+        }
+
+        //組html
+        private static string RetHtml(IEnumerable<dynamic> projects)
+        {
+            int countProj = projects?.Count() ?? 0;
+
+            var sb = new StringBuilder();
+
+            sb.AppendLine("<html>");
+            sb.AppendLine("<body>");
+            sb.AppendLine($"<p>專案總數：{countProj}</p>");
+            sb.AppendLine("<table border='1' cellspacing='0' cellpadding='4' style='border-collapse:collapse;font-family:Segoe UI,Microsoft JhengHei,sans-serif;font-size:12px;'>");
+            sb.AppendLine("<thead>");
+            sb.AppendLine("<tr style='background-color:#f0f0f0;font-weight:bold;'>");
+            sb.AppendLine("<th>ProjID</th>");
+            sb.AppendLine("<th>ProjName</th>");
+            sb.AppendLine("<th>ProjObjKey</th>");
+            sb.AppendLine("<th>CRMNo</th>");
+            sb.AppendLine("</tr>");
+            sb.AppendLine("</thead>");
+            sb.AppendLine("<tbody>");
+
+            foreach (var p in projects)
+            {
+                sb.AppendLine("<tr>");
+                sb.AppendLine($"<td>{WebUtility.HtmlEncode((string)p.ProjID)}</td>");
+                sb.AppendLine($"<td>{WebUtility.HtmlEncode((string)p.ProjName)}</td>");
+                sb.AppendLine($"<td>{WebUtility.HtmlEncode((string)p.ProjObjKey)}</td>");
+                sb.AppendLine($"<td>{WebUtility.HtmlEncode((string)p.CRMNo)}</td>");
+                sb.AppendLine("</tr>");
+            }
+
+            sb.AppendLine("</tbody>");
+            sb.AppendLine("</table>");
+            sb.AppendLine("</body>");
+            sb.AppendLine("</html>");
+
+            return sb.ToString();
         }
     }
 
